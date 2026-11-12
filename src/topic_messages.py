@@ -11,6 +11,7 @@ __all__ = [
     "TopicMessageError",
     "fetch_forum_topic_messages",
     "iter_forum_topic_message_pages",
+    "iter_main_chat_message_pages",
     "message_belongs_to_topic",
 ]
 
@@ -19,6 +20,32 @@ MAX_PAGE_SIZE = 100
 
 class TopicMessageError(Exception):
     """Forum topic message fetch or attribution failed."""
+
+
+async def _invoke_history_page(
+    client: Client,
+    peer: raw.base.InputPeer,
+    *,
+    offset_id: int,
+    min_id: int,
+    limit: int,
+) -> list[types.Message]:
+    result = await client.invoke(
+        raw.functions.messages.GetHistory(
+            peer=peer,
+            offset_id=offset_id,
+            offset_date=0,
+            add_offset=0,
+            limit=limit,
+            max_id=0,
+            min_id=min_id,
+            hash=0,
+        )
+    )
+    if not result.messages:
+        return []
+    page = await utils.parse_messages(client, result) or []
+    return page
 
 
 async def _invoke_replies_page(
@@ -101,6 +128,44 @@ async def iter_forum_topic_message_pages(
         yield _validate_page(
             page, topic_id, other_topic_ids=other_topic_ids
         )
+
+        if len(page) < MAX_PAGE_SIZE:
+            break
+
+        next_offset_id = page[-1].id
+        if next_offset_id == offset_id:
+            break
+        offset_id = next_offset_id
+
+
+async def iter_main_chat_message_pages(
+    client: Client,
+    chat_id: int,
+    *,
+    min_id: int = 0,
+    start_offset_id: int = 0,
+) -> AsyncIterator[list[types.Message]]:
+    """Yield message pages for a non-forum supergroup main chat (newest-first)."""
+    peer = await client.resolve_peer(chat_id)
+    offset_id = start_offset_id
+    seen_offsets: set[int] = set()
+
+    while True:
+        if offset_id in seen_offsets:
+            break
+        seen_offsets.add(offset_id)
+
+        page = await _invoke_history_page(
+            client,
+            peer,
+            offset_id=offset_id,
+            min_id=min_id,
+            limit=MAX_PAGE_SIZE,
+        )
+        if not page:
+            break
+
+        yield page
 
         if len(page) < MAX_PAGE_SIZE:
             break

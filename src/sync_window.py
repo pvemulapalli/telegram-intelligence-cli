@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from hydrogram import types
 
@@ -48,6 +48,44 @@ def cutoff_utc_from_months(
     """UTC cutoff for “messages on or after this instant” backfill windows."""
     anchor = when or utc_now()
     return subtract_calendar_months(anchor, months)
+
+
+def cutoff_utc_from_days(
+    days: int,
+    *,
+    when: datetime | None = None,
+) -> datetime:
+    """UTC cutoff for the last ``days`` calendar days (midnight UTC boundary)."""
+    if days < 0:
+        raise ValueError("days must be non-negative")
+    anchor = when or utc_now()
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    else:
+        anchor = anchor.astimezone(timezone.utc)
+    base = anchor - timedelta(days=days)
+    return base.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def window_policy_key_for_days(days: int) -> int:
+    """
+    Checkpoint ``window_months`` value for a day-based window.
+
+    Negative values distinguish day windows from calendar-month windows so a
+  later ``--months`` run does not match a pilot ``--days`` checkpoint.
+    """
+    if days <= 0:
+        raise ValueError("days must be positive")
+    return -days
+
+
+def format_window_policy_label(policy_months: int) -> str:
+    if policy_months < 0:
+        days = abs(policy_months)
+        noun = "day" if days == 1 else "days"
+        return f"last {days} calendar {noun}"
+    noun = "month" if policy_months == 1 else "months"
+    return f"last {policy_months} calendar {noun}"
 
 
 def cutoff_utc_iso(cutoff: datetime) -> str:

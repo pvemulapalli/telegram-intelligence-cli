@@ -27,6 +27,7 @@ def message_to_record(
     *,
     chat_id: int,
     topic_id: int,
+    pin_topic_id: int | None = None,
 ) -> MessageRecord:
     sender_id, sender_name = _sender_display_name(message)
     message_dt = message.date
@@ -45,11 +46,14 @@ def message_to_record(
     except (ValueError, AttributeError):
         link = None
 
-    assigned_topic = message.message_thread_id
-    if assigned_topic is None and message.id == topic_id:
-        assigned_topic = topic_id
-    if assigned_topic is None:
-        assigned_topic = topic_id
+    if pin_topic_id is not None:
+        assigned_topic = pin_topic_id
+    else:
+        assigned_topic = message.message_thread_id
+        if assigned_topic is None and message.id == topic_id:
+            assigned_topic = topic_id
+        if assigned_topic is None:
+            assigned_topic = topic_id
 
     return MessageRecord(
         chat_id=chat_id,

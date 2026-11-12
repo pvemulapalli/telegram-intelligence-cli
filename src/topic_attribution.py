@@ -9,6 +9,8 @@ from hydrogram import types
 from src.content_kind import classify_content_kind
 
 GENERAL_TOPIC_ID = 1
+MAIN_STREAM_TOPIC_ID = 0
+MAIN_STREAM_TOPIC_TITLE = "Main"
 
 SourceKind = Literal["get_replies", "get_history"]
 

@@ -219,15 +219,25 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Telegram Intelligence (Milestone 1)
+# Telegram Intelligence — local data and exports
 .DS_Store
+data/*
+!data/.gitkeep
+
+# Additional export locations, if used
+exports/
+output/
+
+# Telegram session files
 sessions/*.session
 sessions/*.session-journal
 sessions/*.session-shm
 sessions/*.session-wal
-data/*
-!data/.gitkeep
 !sessions/.gitkeep
+
+# Local diagnostics
+unknown_errors.txt
+
 *.db
 *.sqlite
 *.sqlite3

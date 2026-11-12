@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from hydrogram import Client
 
@@ -27,9 +28,13 @@ from src.message_map import message_to_record
 from src.sync_window import (
     cutoff_utc_from_months,
     cutoff_utc_iso,
+    format_window_policy_label,
     split_page_at_cutoff,
 )
-from src.topic_messages import iter_forum_topic_message_pages
+from src.topic_attribution import MAIN_STREAM_TOPIC_ID, MAIN_STREAM_TOPIC_TITLE
+from src.topic_messages import iter_forum_topic_message_pages, iter_main_chat_message_pages
+
+MessageStream = Literal["forum", "main"]
 
 
 @dataclass(frozen=True)
@@ -70,7 +75,8 @@ def window_policy_matches(
 
     The rolling cutoff timestamp advances daily; completed windows match on ``window_months``
     only so daily ``sync-group`` stays incremental. A different ``window_months`` value
-    (for example expanding 6 → 12) does not match and triggers backfill.
+    (for example expanding 6 → 12, or switching from a day pilot ``-1`` to ``6`` months)
+    does not match and triggers backfill.
     """
     _ = window_cutoff_utc
     return checkpoint.window_months == window_months
@@ -127,13 +133,20 @@ def plan_sync(
 
 
 async def _resolve_titles(
-    client: Client, chat_id: int, topic_id: int
+    client: Client,
+    chat_id: int,
+    topic_id: int,
+    *,
+    stream: MessageStream = "forum",
 ) -> tuple[str | None, str | None]:
     chat_title: str | None = None
     try:
         chat_title = (await client.get_chat(chat_id)).title
     except Exception:
         pass
+
+    if stream == "main":
+        return chat_title, MAIN_STREAM_TOPIC_TITLE
 
     topic_title: str | None = None
     from hydrogram.raw.functions.channels import GetForumTopicsByID
@@ -220,6 +233,7 @@ async def sync_topic_messages(
     window_months: int | None = None,
     window_cutoff: datetime | None = None,
     other_topic_ids: frozenset[int] | None = None,
+    stream: MessageStream = "forum",
     db_path: Path = DATABASE_PATH,
 ) -> SyncResult:
     window_cutoff_utc_str: str | None = None
@@ -250,7 +264,9 @@ async def sync_topic_messages(
             window_months=window_months,
             window_cutoff_utc=window_cutoff_utc_str,
         )
-        chat_title, topic_title = await _resolve_titles(client, chat_id, topic_id)
+        chat_title, topic_title = await _resolve_titles(
+            client, chat_id, topic_id, stream=stream
+        )
         upsert_group(conn, chat_id, chat_title)
         upsert_topic(conn, chat_id, topic_id, topic_title)
         conn.commit()
@@ -283,14 +299,26 @@ async def sync_topic_messages(
         last_resume_offset: int | None = plan.start_offset_id
         stop_pagination = False
 
-        async for page in iter_forum_topic_message_pages(
-            client,
-            chat_id,
-            topic_id,
-            min_id=plan.min_id,
-            start_offset_id=plan.start_offset_id,
-            other_topic_ids=other_topic_ids,
-        ):
+        pin_topic = MAIN_STREAM_TOPIC_ID if stream == "main" else None
+        page_source = (
+            iter_main_chat_message_pages(
+                client,
+                chat_id,
+                min_id=plan.min_id,
+                start_offset_id=plan.start_offset_id,
+            )
+            if stream == "main"
+            else iter_forum_topic_message_pages(
+                client,
+                chat_id,
+                topic_id,
+                min_id=plan.min_id,
+                start_offset_id=plan.start_offset_id,
+                other_topic_ids=other_topic_ids,
+            )
+        )
+
+        async for page in page_source:
             if stop_pagination:
                 break
 
@@ -300,7 +328,12 @@ async def sync_topic_messages(
                 page_to_store, reached_cutoff = split_page_at_cutoff(page, cutoff_dt)
 
             records = [
-                message_to_record(message, chat_id=chat_id, topic_id=topic_id)
+                message_to_record(
+                    message,
+                    chat_id=chat_id,
+                    topic_id=topic_id,
+                    pin_topic_id=pin_topic,
+                )
                 for message in page_to_store
             ]
             fetched += len(records)
@@ -416,7 +449,7 @@ def print_sync_result(result: SyncResult) -> None:
     print(f"Topic ID:      {result.topic_id}")
     print(f"Mode:          {result.mode}")
     if result.window_months is not None:
-        print(f"Window:        last {result.window_months} calendar month(s)")
+        print(f"Window:        {format_window_policy_label(result.window_months)}")
         print(f"Cutoff UTC:    {result.window_cutoff_utc or '—'}")
     print(f"Fetched:       {result.fetched}")
     print(f"Inserted:      {result.inserted}")

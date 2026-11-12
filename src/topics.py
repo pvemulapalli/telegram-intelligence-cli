@@ -270,3 +270,20 @@ def forum_error_hint(exc: RPCError) -> str | None:
     if "CHANNEL_INVALID" in text or "PEER_ID_INVALID" in text:
         return "Invalid chat ID. Use an ID from the `groups` command."
     return None
+
+
+def sync_access_hint(exc: RPCError) -> str | None:
+    text = str(exc).upper()
+    hint = forum_error_hint(exc)
+    if hint is not None:
+        return hint
+    if "USER_NOT_PARTICIPANT" in text:
+        return (
+            "You are not a member of this supergroup, or it is not accessible "
+            "with your account."
+        )
+    if "CHAT_ID_INVALID" in text or "CHAT_INVALID" in text:
+        return "Invalid chat ID. Use an ID from the `groups` command."
+    if "CHANNEL_PRIVATE" in text:
+        return "You do not have access to this chat (not a member or invalid ID)."
+    return None

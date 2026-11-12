@@ -28,7 +28,12 @@ def print_sync_status(db_path: Path = DATABASE_PATH) -> None:
         if len(title) > 20:
             title = title[:19] + "…"
         months = row["window_months"]
-        months_display = str(months) if months is not None else "—"
+        if months is None:
+            months_display = "—"
+        elif months < 0:
+            months_display = f"{abs(months)}d"
+        else:
+            months_display = str(months)
         window = "yes" if row["window_complete"] else "no"
         if months is not None:
             full = "no"

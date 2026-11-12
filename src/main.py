@@ -40,7 +40,7 @@ from src.sync_status import print_sync_status
 from src.sync_window import DEFAULT_SYNC_GROUP_MONTHS
 from src.telegram_app import build_client
 from src.topic_messages import TopicMessageError
-from src.topics import fetch_forum_topics, forum_error_hint, print_topics
+from src.topics import fetch_forum_topics, forum_error_hint, print_topics, sync_access_hint
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -109,14 +109,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sync_group = sub.add_parser(
         "sync-group",
-        help="Synchronize all forum topics (windowed backfill, then incremental).",
+        help=(
+            "Synchronize a supergroup: all forum topics, or main chat if not a forum."
+        ),
     )
     sync_group.add_argument("--chat-id", type=int, required=True)
     sync_group.add_argument(
         "--months",
         type=int,
-        default=DEFAULT_SYNC_GROUP_MONTHS,
-        help=f"Calendar months of history to backfill (default: {DEFAULT_SYNC_GROUP_MONTHS}).",
+        default=None,
+        help=(
+            f"Calendar months of history to backfill "
+            f"(default: {DEFAULT_SYNC_GROUP_MONTHS} when --days is omitted)."
+        ),
+    )
+    sync_group.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Calendar days of history to backfill (alternative to --months).",
     )
     sync_group.add_argument(
         "--overlap",
@@ -341,7 +352,8 @@ async def _run_diagnose_general(chat_id: int, limit: int) -> None:
 
 async def _run_sync_group(
     chat_id: int,
-    months: int,
+    months: int | None,
+    days: int | None,
     overlap: int,
     topic_delay: float,
 ) -> None:
@@ -352,6 +364,7 @@ async def _run_sync_group(
             client,
             chat_id,
             months=months,
+            days=days,
             overlap_message_ids=overlap,
             topic_delay_seconds=topic_delay,
         )
@@ -524,8 +537,12 @@ def main(argv: list[str] | None = None) -> None:
                 parser.error("--limit must be a positive integer.")
             asyncio.run(_run_diagnose_general(args.chat_id, args.limit))
         elif args.command == "sync-group":
-            if args.months <= 0:
+            if args.months is not None and args.days is not None:
+                parser.error("Cannot use both --months and --days.")
+            if args.months is not None and args.months <= 0:
                 parser.error("--months must be a positive integer.")
+            if args.days is not None and args.days <= 0:
+                parser.error("--days must be a positive integer.")
             if args.overlap < 0:
                 parser.error("--overlap must be zero or a positive integer.")
             if args.topic_delay < 0:
@@ -534,6 +551,7 @@ def main(argv: list[str] | None = None) -> None:
                 _run_sync_group(
                     args.chat_id,
                     args.months,
+                    args.days,
                     args.overlap,
                     args.topic_delay,
                 )
@@ -552,7 +570,12 @@ def main(argv: list[str] | None = None) -> None:
     ) as exc:
         exit_with_message(str(exc))
     except RPCError as exc:
-        hint = forum_error_hint(exc) if args.command == "topics" else None
+        if args.command == "topics":
+            hint = forum_error_hint(exc)
+        elif args.command in ("sync-group", "sync"):
+            hint = sync_access_hint(exc)
+        else:
+            hint = None
         message = format_rpc_error(exc)
         if hint:
             message = f"{hint}\n{message}"

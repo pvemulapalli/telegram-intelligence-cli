@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from hydrogram import Client
 
+from src.chat_mode import resolve_supergroup_sync_mode
 from src.config import DATABASE_PATH
 from src.export_topic import build_export_topics_batch_spec
 from src.sync import SyncError, SyncResult, sync_topic_messages
-from src.sync_window import DEFAULT_SYNC_GROUP_MONTHS, cutoff_utc_from_months, cutoff_utc_iso
-from src.topic_attribution import GENERAL_TOPIC_ID
+from src.sync_window import (
+    DEFAULT_SYNC_GROUP_MONTHS,
+    cutoff_utc_from_days,
+    cutoff_utc_from_months,
+    cutoff_utc_iso,
+    format_window_policy_label,
+    window_policy_key_for_days,
+)
+from src.topic_attribution import (
+    GENERAL_TOPIC_ID,
+    MAIN_STREAM_TOPIC_ID,
+    MAIN_STREAM_TOPIC_TITLE,
+)
 from src.topics import fetch_forum_topics
 
 
@@ -21,6 +34,44 @@ class GroupSyncTopicOutcome:
     skipped: bool
     skip_reason: str | None
     result: SyncResult | None
+
+
+@dataclass(frozen=True)
+class SyncGroupWindow:
+    """Resolved backfill window for ``sync-group``."""
+
+    policy_key: int
+    cutoff: datetime
+    cutoff_iso: str
+
+
+def resolve_sync_group_window(
+    *,
+    months: int | None = None,
+    days: int | None = None,
+) -> SyncGroupWindow:
+    if months is not None and days is not None:
+        raise SyncError("Cannot use both --months and --days.")
+    if days is not None:
+        if days <= 0:
+            raise SyncError("--days must be a positive integer.")
+        cutoff = cutoff_utc_from_days(days)
+        return SyncGroupWindow(
+            policy_key=window_policy_key_for_days(days),
+            cutoff=cutoff,
+            cutoff_iso=cutoff_utc_iso(cutoff),
+        )
+    resolved_months = (
+        months if months is not None else DEFAULT_SYNC_GROUP_MONTHS
+    )
+    if resolved_months <= 0:
+        raise SyncError("--months must be a positive integer.")
+    cutoff = cutoff_utc_from_months(resolved_months)
+    return SyncGroupWindow(
+        policy_key=resolved_months,
+        cutoff=cutoff,
+        cutoff_iso=cutoff_utc_iso(cutoff),
+    )
 
 
 @dataclass(frozen=True)
@@ -45,16 +96,43 @@ async def sync_group_forum_topics(
     client: Client,
     chat_id: int,
     *,
-    months: int = DEFAULT_SYNC_GROUP_MONTHS,
+    months: int | None = None,
+    days: int | None = None,
     overlap_message_ids: int = 10,
     topic_delay_seconds: float = 1.0,
     db_path: Path = DATABASE_PATH,
 ) -> GroupSyncReport:
-    if months <= 0:
-        raise SyncError("--months must be a positive integer.")
+    window = resolve_sync_group_window(months=months, days=days)
+    policy = window.policy_key
+    cutoff = window.cutoff
+    cutoff_iso = window.cutoff_iso
 
-    cutoff = cutoff_utc_from_months(months)
-    cutoff_iso = cutoff_utc_iso(cutoff)
+    is_forum = await resolve_supergroup_sync_mode(client, chat_id)
+    if not is_forum:
+        result = await sync_topic_messages(
+            client,
+            chat_id,
+            MAIN_STREAM_TOPIC_ID,
+            overlap_message_ids=overlap_message_ids,
+            window_months=policy,
+            window_cutoff=cutoff,
+            stream="main",
+            db_path=db_path,
+        )
+        return GroupSyncReport(
+            chat_id=chat_id,
+            window_months=policy,
+            window_cutoff_utc=cutoff_iso,
+            topics=(
+                GroupSyncTopicOutcome(
+                    topic_id=MAIN_STREAM_TOPIC_ID,
+                    title=MAIN_STREAM_TOPIC_TITLE,
+                    skipped=False,
+                    skip_reason=None,
+                    result=result,
+                ),
+            ),
+        )
 
     topic_rows = await fetch_forum_topics(client, chat_id, debug=False)
     other_topic_ids = frozenset(
@@ -76,7 +154,7 @@ async def sync_group_forum_topics(
             chat_id,
             topic_id,
             overlap_message_ids=overlap_message_ids,
-            window_months=months,
+            window_months=policy,
             window_cutoff=cutoff,
             other_topic_ids=other_topic_ids
             if topic_id == GENERAL_TOPIC_ID
@@ -95,7 +173,7 @@ async def sync_group_forum_topics(
 
     return GroupSyncReport(
         chat_id=chat_id,
-        window_months=months,
+        window_months=policy,
         window_cutoff_utc=cutoff_iso,
         topics=tuple(outcomes),
     )
@@ -103,7 +181,7 @@ async def sync_group_forum_topics(
 
 def print_group_sync_report(report: GroupSyncReport) -> None:
     print(f"Chat ID:       {report.chat_id}")
-    print(f"Window:        last {report.window_months} calendar month(s)")
+    print(f"Window:        {format_window_policy_label(report.window_months)}")
     print(f"Cutoff UTC:    {report.window_cutoff_utc}")
     print()
     print(

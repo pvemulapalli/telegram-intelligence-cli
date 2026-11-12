@@ -4,10 +4,13 @@ import unittest
 from datetime import datetime, timezone
 
 from src.sync_window import (
+    cutoff_utc_from_days,
     cutoff_utc_from_months,
+    format_window_policy_label,
     message_on_or_after_cutoff,
     split_page_at_cutoff,
     subtract_calendar_months,
+    window_policy_key_for_days,
 )
 
 
@@ -27,6 +30,18 @@ class CalendarMonthTests(unittest.TestCase):
         when = datetime(2026, 10, 18, 16, 48, tzinfo=timezone.utc)
         cutoff = cutoff_utc_from_months(6, when=when)
         self.assertEqual(cutoff, datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc))
+
+    def test_one_day_cutoff_midnight_boundary(self) -> None:
+        when = datetime(2026, 11, 12, 15, 30, tzinfo=timezone.utc)
+        cutoff = cutoff_utc_from_days(1, when=when)
+        self.assertEqual(cutoff, datetime(2026, 11, 11, 0, 0, tzinfo=timezone.utc))
+
+    def test_day_policy_key_negative(self) -> None:
+        self.assertEqual(window_policy_key_for_days(1), -1)
+
+    def test_format_day_and_month_labels(self) -> None:
+        self.assertIn("1 calendar day", format_window_policy_label(-1))
+        self.assertIn("6 calendar months", format_window_policy_label(6))
 
 
 class CutoffPageTests(unittest.TestCase):
